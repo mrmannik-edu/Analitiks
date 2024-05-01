@@ -1,92 +1,100 @@
-import plotly.graph_objs as go
 import pandas as pd
-import time
-from collections import defaultdict
-from itertools import combinations
+from sklearn.model_selection import train_test_split
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+from sklearn.preprocessing import LabelEncoder
 
-# Определение функции для выполнения алгоритма Apriori
-def apriori(data, min_support, order):
-    transactions = data.values.tolist()
-    itemset = set()
-    freq_sets = defaultdict(int)
 
-    # Создание начального набора элементов
-    for transaction in transactions:
-        for item in transaction:
-            itemset.add(frozenset([item]))
-            freq_sets[frozenset([item])] += 1
+# Функция для загрузки данных
+def load_data(file_path, skiprows=None):
+    data = pd.read_csv(file_path, header=None, delimiter=',', skiprows=skiprows)
+    # Удаление пробелов в начале и конце строк в каждом столбце
+    data = data.apply(lambda col: col.str.strip() if col.dtypes == object else col)
+    return data
 
-    # Фильтрация набора элементов на основе min_support
-    itemset = set([item for item in itemset if freq_sets[item] >= min_support])
-    freq_itemsets = []
-    k = 2
-    while itemset:
-        new_combinations = set([i.union(j) for i in itemset for j in itemset if len(i.union(j)) == k])
-        for transaction in transactions:
-            for combination in new_combinations:
-                if combination.issubset(transaction):
-                    freq_sets[combination] += 1
-        itemset = set([item for item in new_combinations if freq_sets[item] >= min_support])
-        freq_itemsets.extend([(item, freq_sets[item]) for item in itemset])
-        k += 1
+# Путь к файлам
+path_train = r'C:\Users\ПК\Downloads\adult.data.txt'
+path_test = r'C:\Users\ПК\Downloads\adult.test.txt'
 
-    if order == 'support':
-        freq_itemsets.sort(key=lambda x: x[1], reverse=True)
-    elif order == 'lexicographic':
-        freq_itemsets.sort(key=lambda x: tuple(x[0]))
+try:
+    # Загрузка тренировочных и тестовых данных
+    train_data = load_data(path_train)
+    test_data = load_data(path_test, skiprows=1)
 
-    return freq_itemsets, freq_sets
+    # Назначение имен столбцов
+    columns = ['Age', 'Workclass', 'fnlwgt', 'Education', 'Education-Num', 'Marital-Status',
+               'Occupation', 'Relationship', 'Race', 'Sex', 'Capital-Gain', 'Capital-Loss',
+               'Hours-per-week', 'Native-Country', 'Income']
+    train_data.columns = columns
+    test_data.columns = columns
 
-# Функция для генерации ассоциативных правил
-def generate_rules(freq_itemsets, freq_sets, min_confidence, total_transactions):
-    rules = []
-    for itemset, support in freq_itemsets:
-        for k in range(1, len(itemset)):
-            for antecedent in combinations(itemset, k):
-                antecedent = frozenset(antecedent)
-                consequent = itemset - antecedent
-                antecedent_support = freq_sets[antecedent] / total_transactions
-                rule_confidence = support / total_transactions / antecedent_support
-                if rule_confidence >= min_confidence:
-                    rules.append((antecedent, consequent, support / total_transactions, rule_confidence))
-    return rules
+    # Инициализация LabelEncoder
+    le = LabelEncoder()
 
-# Загрузка набора данных
-data = pd.read_csv(r'C:\Users\ПК\Desktop\baskets.csv', encoding='ANSI')
-total_transactions = len(data)
+    # Предобработка категориальных данных с LabelEncoder
+    cat_features = ['Workclass', 'Education', 'Marital-Status', 'Occupation', 'Relationship', 'Race', 'Sex', 'Native-Country']
+    for col in cat_features:
+        train_data[col] = le.fit_transform(train_data[col])
+        test_data[col] = le.transform(test_data[col])
 
-# Выполнение алгоритма Apriori и генерация правил
-frequent_itemsets, freq_sets = apriori(data, 0.1 * len(data), 'support')
-confidence_levels = [0.7, 0.75, 0.8, 0.85, 0.9, 0.95]
-performance_times = []
-rules_count = []
+    # Кодирование целевой переменной, убедитесь что 'Income' чист от пробелов и точек
+    train_data['Income'] = le.fit_transform(train_data['Income'].str.replace('.', ''))
+    test_data['Income'] = le.transform(test_data['Income'].str.replace('.', ''))
 
-# Проходим по различным уровням достоверности и собираем статистику
-for confidence in confidence_levels:
-    start_time = time.time()
-    rules = generate_rules(frequent_itemsets, freq_sets, confidence, total_transactions)
-    end_time = time.time()
-    performance_times.append(end_time - start_time)
-    rules_count.append(len(rules))
+    # Подготовка данных для обучения
+    X_train = train_data.drop('Income', axis=1)
+    y_train = train_data['Income']
+    X_test = test_data.drop('Income', axis=1)
+    y_test = test_data['Income']
 
-# Печать правил
-for antecedent, consequent, support, confidence in rules:
-    print(f"{set(antecedent)} → {set(consequent)}, support: {support:.4f}, confidence: {confidence:.4f}")
+    # Создание модели дерева решений
+    model = DecisionTreeClassifier(criterion='gini')
+    model.fit(X_train, y_train)
 
-# Визуализация результатов
+    # Предсказание на тестовом наборе
+    predictions = model.predict(X_test)
 
-# График времени выполнения
-time_trace = go.Scatter(x=confidence_levels, y=performance_times, mode='lines+markers', name='Время выполнения')
-time_layout = go.Layout(title='Время выполнения по разным уровням достоверности',
-                        xaxis={'title': 'Порог достоверности'},
-                        yaxis={'title': 'Время, сек'})
-time_fig = go.Figure(data=[time_trace], layout=time_layout)
-time_fig.show()
+    # Оценка модели
+    accuracy = accuracy_score(y_test, predictions)
+    precision = precision_score(y_test, predictions, average='binary', pos_label=1)
+    recall = recall_score(y_test, predictions, average='binary', pos_label=1)
+    f1 = f1_score(y_test, predictions, average='binary', pos_label=1)
 
-# График количества правил
-count_trace = go.Bar(x=confidence_levels, y=rules_count, name='Количество правил')
-count_layout = go.Layout(title='Количество правил по разным уровням достоверности',
-                         xaxis={'title': 'Порог достоверности'},
-                         yaxis={'title': 'Количество правил'})
-count_fig = go.Figure(data=[count_trace], layout=count_layout)
-count_fig.show()
+    print(f"Accuracy: {accuracy}")
+    print(f"Precision: {precision}")
+    print(f"Recall: {recall}")
+    print(f"F1 Score: {f1}")
+
+except Exception as e:
+    print("Произошла ошибка при загрузке или обработке данных:", e)
+
+
+import matplotlib
+matplotlib.use('Agg')  # Использование бэкенда Agg, который подходит для сохранения изображений в файл
+import matplotlib.pyplot as plt
+
+
+# Значения метрик
+metrics = {
+    'Accuracy': 0.8104,
+    'Precision': 0.5970,
+    'Recall': 0.6071,
+    'F1 Score': 0.6020
+}
+
+# Названия метрик и их значения
+names = list(metrics.keys())
+values = list(metrics.values())
+
+# Создание столбчатой диаграммы
+plt.figure(figsize=(10, 5))
+plt.bar(names, values, color=['blue', 'green', 'red', 'purple'])
+
+# Добавление заголовка и меток
+plt.title('Performance Metrics of the Decision Tree Model')
+plt.xlabel('Metrics')
+plt.ylabel('Value')
+plt.ylim([0, 1])  # Установка пределов оси Y для лучшего сравнения
+
+# Сохранение графика в файл
+plt.savefig('metrics_plot.png')
